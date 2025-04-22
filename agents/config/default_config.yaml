@@ -1,0 +1,19 @@
+model_config:
+  default_model: "gpt-3.5-turbo"
+  fallback_model: "simple-regex"
+  api_key: "${OPENAI_API_KEY}"
+
+logging:
+  level: "INFO"
+  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+
+agents:
+  code_analyzer:
+    enabled: true
+    patterns:
+      security:
+        - pattern: "(?i)(password|secret|key)\\s*=\\s*['\"][^'\"]+['\"]"
+          severity: "high"
+      performance:
+        - pattern: "for.*in.*:\\s*$"
+          max_nesting: 3 
