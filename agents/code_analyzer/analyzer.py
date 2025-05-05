@@ -1,5 +1,6 @@
 from typing import Dict, List, Any, Optional
 import re
+import json
 from pathlib import Path
 from ..common.base import AgentBase
 from ..common.model_manager import ModelType
@@ -16,6 +17,13 @@ class CodeAnalyzer(AgentBase):
         """
         super().__init__(config_path)
         self.patterns = self._load_patterns()
+        self.analysis_categories = [
+            'security',
+            'performance',
+            'code_style',
+            'potential_bugs',
+            'best_practices'
+        ]
         
     def _load_patterns(self) -> Dict[str, List[Dict[str, Any]]]:
         """Load analysis patterns from configuration."""
@@ -111,23 +119,104 @@ class CodeAnalyzer(AgentBase):
         Returns:
             Dict containing AI analysis results
         """
-        prompt = f"""Analyze the following code for potential issues, improvements, and best practices:
+        prompt = f"""Analyze the following Python code for potential issues, improvements, and best practices:
 
 {content}
 
-Provide a structured analysis including:
-1. Security concerns
-2. Performance issues
-3. Code style and readability
-4. Potential bugs
-5. Best practice violations
+Provide a structured analysis including the following categories:
+1. Security concerns - Identify potential security vulnerabilities, sensitive data exposure, or unsafe practices
+2. Performance issues - Find inefficient code patterns, potential bottlenecks, or resource-intensive operations
+3. Code style and readability - Evaluate code organization, naming conventions, and overall maintainability
+4. Potential bugs - Identify possible logical errors, edge cases, or problematic patterns
+5. Best practice violations - Check against Python best practices and common conventions
 
-Format the response as a JSON object with these categories."""
+For each category, provide:
+- A list of specific issues found
+- The line numbers where issues occur
+- A brief explanation of each issue
+- Suggested improvements where applicable
+
+Format the response as a JSON object with these categories as keys. Each category should contain an array of issues, where each issue has:
+- "line": line number
+- "description": description of the issue
+- "severity": "low", "medium", or "high"
+- "suggestion": optional improvement suggestion"""
 
         try:
             response = await self.model_manager.get_completion(prompt)
-            # TODO: Parse the response into a structured format
-            return {'raw_response': response}
+            return self._parse_ai_response(response)
         except Exception as e:
             self.logger.error(f"Error in AI analysis: {e}")
-            return {'error': str(e)} 
+            return {'error': str(e)}
+            
+    def _parse_ai_response(self, response: str) -> Dict[str, Any]:
+        """
+        Parse the AI response into a structured format.
+        
+        Args:
+            response: The raw AI response
+            
+        Returns:
+            Dict containing parsed analysis results
+        """
+        try:
+            # Try to parse as JSON
+            parsed = json.loads(response)
+            
+            # Validate structure
+            if not isinstance(parsed, dict):
+                raise ValueError("Response is not a JSON object")
+                
+            # Ensure all categories exist
+            for category in self.analysis_categories:
+                if category not in parsed:
+                    parsed[category] = []
+                    
+            return parsed
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract structured information
+            self.logger.warning("Failed to parse AI response as JSON, attempting to extract information")
+            return self._extract_structured_info(response)
+            
+    def _extract_structured_info(self, response: str) -> Dict[str, Any]:
+        """
+        Extract structured information from a non-JSON response.
+        
+        Args:
+            response: The raw AI response
+            
+        Returns:
+            Dict containing extracted analysis results
+        """
+        result = {category: [] for category in self.analysis_categories}
+        
+        # Look for category headers and their content
+        for category in self.analysis_categories:
+            category_pattern = f"{category}.*?:"
+            category_match = re.search(category_pattern, response, re.IGNORECASE)
+            
+            if category_match:
+                # Find the next category or end of response
+                next_category = None
+                for other_category in self.analysis_categories:
+                    if other_category != category:
+                        next_match = re.search(f"{other_category}.*?:", response[category_match.end():], re.IGNORECASE)
+                        if next_match:
+                            next_category = category_match.end() + next_match.start()
+                            break
+                            
+                # Extract content between current category and next
+                content_end = next_category if next_category else len(response)
+                category_content = response[category_match.end():content_end]
+                
+                # Extract issues from content
+                issues = re.finditer(r"line\s*(\d+).*?severity\s*:\s*(low|medium|high)", category_content, re.IGNORECASE)
+                for issue in issues:
+                    result[category].append({
+                        'line': int(issue.group(1)),
+                        'severity': issue.group(2).lower(),
+                        'description': 'Issue found',  # Simplified for now
+                        'suggestion': 'Check the code'  # Simplified for now
+                    })
+                    
+        return result 
